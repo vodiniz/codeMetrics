@@ -1,5 +1,6 @@
 import ast
 import argparse
+from cognitive_complexity.api import get_cognitive_complexity
 
 def calculate_unique_operators(source_code):
     """
@@ -160,44 +161,7 @@ def calculate_sloc(source_code):
     sloc = sum(1 for line in lines if line.strip() and not line.strip().startswith('#'))
     return sloc
 
-class CognitiveComplexityVisitor(ast.NodeVisitor):
-    def __init__(self):
-        self.complexity = 0
-        self.nesting_level = 0
-        self.max_nesting = 0
-    
-    def visit_FunctionDef(self, node):
-        self.nesting_level = 0
-        self.generic_visit(node)
-        self.complexity += self.max_nesting
-    
-    def visit_If(self, node):
-        self._handle_control_flow()
-        self.generic_visit(node)
-    
-    def visit_For(self, node):
-        self._handle_control_flow()
-        self.generic_visit(node)
-    
-    def visit_While(self, node):
-        self._handle_control_flow()
-        self.generic_visit(node)
-    
-    def visit_Try(self, node):
-        self._handle_control_flow()
-        self.generic_visit(node)
-    
-    def visit_ExceptHandler(self, node):
-        self._handle_control_flow()
-        self.generic_visit(node)
-    
-    def _handle_control_flow(self):
-        self.nesting_level += 1
-        self.max_nesting = max(self.max_nesting, self.nesting_level)
-    
-    def generic_visit(self, node):
-        self.nesting_level -= 1
-        super().generic_visit(node)
+
 
 def calculate_cognitive_complexity(source_code):
     """
@@ -206,11 +170,76 @@ def calculate_cognitive_complexity(source_code):
     :param source_code: The source code to be evaluated as a string.
     :return: The cognitive complexity number.
     """
-    tree = ast.parse(source_code)
-    visitor = CognitiveComplexityVisitor()
-    visitor.visit(tree)
-    return visitor.complexity
+    tree = ast.parse(source_code).body[0]
+    
+    
+    try:
+        cognitive = get_cognitive_complexity(tree)
+    except:
+        cognitive = 1
+    return cognitive
 
+
+from radon.complexity import cc_visit
+from radon.raw import analyze
+
+def radon_cc(source_code):
+    try:
+        # Análise do código fonte para calcular a complexidade ciclomática
+        complexity_results = cc_visit(source_code)
+        
+        # Retorna a complexidade ciclomática total
+        total_complexity = sum(result.complexity for result in complexity_results)
+        
+    except Exception as e:
+        total_complexity = 1
+        
+    return total_complexity
+
+
+import subprocess
+
+def run_complexipy_command(file_path):
+    # Caminho para o diretório do projeto e do ambiente virtual
+    project_dir = '/home/vodiniz/Prog/codeMetrics'
+    virtualenv_activate_script = os.path.join(project_dir, '.env/bin/activate')
+    
+    # Comando para ativar o ambiente virtual e executar o complexipy
+    command = f"source {virtualenv_activate_script} && complexipy {file_path} -l file -o"
+    
+    try:
+        # Executa o comando no diretório do projeto
+        result = subprocess.run(command, shell=True, text=True, capture_output=True, cwd=project_dir, check=True)
+        
+        # Caminho do arquivo CSV gerado
+        csv_file_path = os.path.join(project_dir, 'complexipy.csv')
+        
+        return csv_file_path
+        
+    except subprocess.CalledProcessError as e:
+        print(f"Erro ao executar o comando: {e}")
+        print(f"Saída do erro: {e.stderr}")
+        return None
+    
+
+import pandas as pd
+def read_complexipy_csv(csv_file_path):
+    try:
+        # Lê o arquivo CSV usando pandas
+        df = pd.read_csv(csv_file_path)
+        
+        # Verifica se as colunas esperadas estão presentes
+        if 'Path' not in df.columns or 'Cognitive Complexity' not in df.columns:
+            raise ValueError("O arquivo CSV não contém as colunas esperadas.")
+        
+        # Cria um dicionário com Path como chave e Cognitive Complexity como valor
+        complexity_dict = dict(zip(df['Path'], df['Cognitive Complexity']))
+        
+        return complexity_dict
+    
+    except Exception as e:
+        print(f"Erro ao ler o arquivo CSV: {e}")
+        return None
 
 from tabulate import tabulate
 from simple_colors import *
@@ -218,9 +247,9 @@ import os
 
 def print_code_metrics(data, show_headers=False):
     headers = [
-        "Path", "File", "Cyclomatic Complexity", 
+        "Path", "File", "Cyclomatic Complexity", "Radon CC",
         "Unique Operators", "Total Statements", 
-        "Avg Nested Depth", "Total Operators", "SLOC", "Cognitive Complexity"
+        "Avg Nested Depth", "Total Operators", "SLOC", "Cognitive Complexity", "Complexipy Cog. C."
     ]
     
     if show_headers:
@@ -238,21 +267,26 @@ def print_code_metrics(data, show_headers=False):
 
     print(table)
 
-def process_file(filename):
+def process_file(filename, complexity_dict):
     """Processa um único arquivo e retorna suas métricas."""
     try:
+
+        cognitive_complexity = complexity_dict.get(filename, 'N/A')
+
         with open(filename, 'r') as file:
             source_code = file.read()
             metrics = [
                 filename,
                 filename,
                 calculate_cyclomatic_complexity(source_code),
+                radon_cc(source_code),
                 calculate_unique_operators(source_code),
                 calculate_total_statements(source_code),
                 calculate_average_depth(source_code),
                 calculate_total_operators(source_code),
                 calculate_sloc(source_code),
-                calculate_cognitive_complexity(source_code)
+                calculate_cognitive_complexity(source_code),
+                cognitive_complexity
             ]
             return metrics
     except FileNotFoundError:
@@ -261,6 +295,10 @@ def process_file(filename):
     except Exception as e:
         print(f"Error opening the file: {e}")
         return None
+
+
+
+
 
 def main():
     # Create the argument parser
@@ -278,19 +316,24 @@ def main():
     data = []
     show_headers = True
 
+    csv_file_path = run_complexipy_command(path)
+    complexity_dict = read_complexipy_csv(csv_file_path)
+
     if os.path.isfile(path):
         # Process a single file
-        metrics = process_file(path)
+        metrics = process_file(path, complexity_dict)
+        run_complexipy_command(path)
         if metrics:
             data.append(metrics)
     elif os.path.isdir(path):
+        run_complexipy_command(path)
         # Process all files in the directory
         for root, dirs, files in os.walk(path):
             for file in files:
                 # Assuming you want to process only Python files
                 if file.endswith('.py'):
                     file_path = os.path.join(root, file)
-                    metrics = process_file(file_path)
+                    metrics = process_file(file_path, complexity_dict)
                     if metrics:
                         data.append(metrics)
         show_headers = True
@@ -298,8 +341,14 @@ def main():
         print(f"Error: The path '{path}' is neither a file nor a directory.")
         return
 
+    # sort metrics
+    data = sorted(data, key=lambda x: x[1])
+
     # Print all data with headers
     print_code_metrics(data, show_headers)
+
+
+
 
 # Ensure that this script is run directly
 if __name__ == "__main__":
