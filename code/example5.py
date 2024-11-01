@@ -8,3 +8,4 @@ ns = av1 + av2
 print(f'A nota na AV1 é: {av1:.2f}')
 print(f'A nota na AV2 é: {av2:.2f}')
 print(f'A nota no semestre é: {ns:.2f}')
+
